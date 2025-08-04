@@ -1,0 +1,256 @@
+# Enhanced Document Detection Training Configuration
+
+# Model configuration
+model:
+  type: "hybrid"  # Options: "yolo", "hybrid", "transformer"
+  backbone: "convnext_base_in22k"  # Backbone model from timm
+  num_classes: 26  # Will be automatically set based on dataset
+  pretrained: true
+  
+  # YOLO-specific settings
+  yolo_model: "yolov8x.pt"  # Base YOLO model
+  
+  # Hybrid model settings
+  use_transformer_decoder: true
+  num_decoder_layers: 3
+  num_object_queries: 100
+
+# Dataset configuration
+datasets:
+  publaynet:
+    use: true
+    weight: 1.0
+  docbank:
+    use: true
+    weight: 1.2
+  pubtables:
+    use: true
+    weight: 0.8
+  musescore:
+    use: true
+    weight: 1.5
+  funsd:
+    use: true
+    weight: 1.0
+  synthetic:
+    use: false
+    weight: 0.5
+
+# Training configuration
+training:
+  epochs: 100
+  batch_size: 16
+  accumulate_grad_batches: 4  # Effective batch size = 64
+  num_workers: 8
+  
+  # Learning rate settings
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_epochs: 5
+  
+  # Scheduler settings
+  scheduler_T0: 10
+  scheduler_multiplier: 2
+  min_lr: 1e-6
+  
+  # Loss weights
+  loss_weights:
+    classification: 1.0
+    bbox_regression: 2.0
+    objectness: 1.0
+  
+  # Training strategies
+  use_mixed_precision: true
+  gradient_clip_val: 1.0
+  
+  # Checkpointing
+  checkpoint_dir: "checkpoints/enhanced_detector"
+  save_interval: 5
+  save_top_k: 3
+  
+  # Logging
+  log_interval: 50
+  val_interval: 1
+
+# Multi-stage training
+multi_stage:
+  enable: true
+  stages:
+    - name: "pretrain"
+      epochs: 20
+      datasets: ["publaynet", "docbank"]
+      learning_rate: 1e-3
+      freeze_backbone: false
+      
+    - name: "finetune_general"
+      epochs: 30
+      datasets: ["all"]
+      learning_rate: 5e-4
+      freeze_backbone: false
+      
+    - name: "finetune_specific"
+      epochs: 20
+      datasets: ["musescore", "funsd"]
+      learning_rate: 1e-4
+      freeze_backbone: true
+      
+    - name: "final"
+      epochs: 30
+      datasets: ["all"]
+      learning_rate: 1e-5
+      freeze_backbone: false
+
+# Augmentation settings
+augmentation:
+  # Probability settings
+  geometric_prob: 0.5
+  color_prob: 0.7
+  noise_prob: 0.3
+  
+  # Specific augmentations
+  rotation_limit: 5
+  scale_limit: 0.1
+  perspective_scale: 0.05
+  
+  # Document-specific
+  jpeg_quality_lower: 70
+  jpeg_quality_upper: 100
+  
+  # Advanced augmentations
+  use_mixup: true
+  mixup_alpha: 0.2
+  use_cutmix: true
+  cutmix_alpha: 1.0
+  
+  # Copy-paste augmentation for small objects
+  use_copy_paste: true
+  copy_paste_prob: 0.3
+
+# Validation settings
+validation:
+  confidence_threshold: 0.25
+  nms_threshold: 0.45
+  max_detections: 300
+  
+  # Metrics
+  compute_map: true
+  iou_thresholds: [0.5, 0.75, 0.95]
+  compute_per_class_metrics: true
+
+# Inference settings
+inference:
+  confidence_threshold: 0.3
+  nms_threshold: 0.5
+  max_detections: 500
+  
+  # Test-time augmentation
+  use_tta: true
+  tta_scales: [0.8, 1.0, 1.2]
+  tta_flips: ["horizontal"]
+
+# Hardware settings
+hardware:
+  device: "cuda"  # or "cpu"
+  cuda_device: 0
+  distributed:
+    enable: false
+    backend: "nccl"
+    num_gpus: 4
+
+# Experiment tracking
+wandb:
+  enable: true
+  project: "enhanced-document-detection"
+  entity: null  # Your wandb entity
+  tags: ["multi-dataset", "hybrid-model", "sota"]
+  
+# Image settings
+image_size: 1024  # Larger size for document images
+max_image_size: 2048  # Maximum size before resizing
+
+# Class remapping for unified detection
+class_mapping:
+  # PubLayNet -> Unified
+  "text": "text"
+  "title": "title"
+  "list": "list"
+  "table": "table"
+  "figure": "figure"
+  
+  # DocBank -> Unified
+  "abstract": "text"
+  "author": "text"
+  "caption": "caption"
+  "date": "text"
+  "equation": "equation"
+  "footer": "footer"
+  "paragraph": "text"
+  "reference": "text"
+  "section": "title"
+  
+  # Music -> Unified
+  "notehead": "note"
+  "stem": "note"
+  "beam": "note"
+  "rest": "note"
+  "accidental": "note"
+  "barline": "measure"
+  "keySignature": "clef"
+  "timeSignature": "time_signature"
+  "slur": "note"
+  "tie": "note"
+  "dynamic": "note"
+  
+  # Forms -> Unified
+  "question": "input_field"
+  "answer": "text"
+  "other": "text"
+
+# Post-processing rules
+post_processing:
+  # Minimum box sizes
+  min_box_width: 10
+  min_box_height: 10
+  
+  # Class-specific rules
+  rules:
+    staff:
+      min_width: 100
+      max_aspect_ratio: 50
+      
+    note:
+      min_area: 20
+      max_area: 5000
+      
+    table:
+      min_area: 1000
+      
+    text:
+      min_area: 50
+
+# Ensemble settings
+ensemble:
+  enable: true
+  models:
+    - type: "yolo"
+      weight: 0.4
+      config: "configs/yolo_config.yaml"
+      
+    - type: "detr"
+      weight: 0.3
+      config: "configs/detr_config.yaml"
+      
+    - type: "layoutlm"
+      weight: 0.3
+      config: "configs/layoutlm_config.yaml"
+  
+  fusion_method: "weighted_voting"  # Options: "weighted_voting", "nms", "soft_nms"
+  voting_threshold: 0.3
+
+# Debug settings
+debug:
+  enable: false
+  save_predictions: true
+  visualize_augmentations: false
+  num_visualization_samples: 10
+  profile: false
