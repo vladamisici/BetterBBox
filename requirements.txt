@@ -1,0 +1,74 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Deep Learning frameworks
+ultralytics>=8.1.0
+transformers>=4.35.0
+timm>=0.9.0
+
+# Data processing and augmentation
+albumentations>=1.3.0
+imgaug>=0.4.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.17.0
+
+# Progress and logging
+tqdm>=4.65.0
+wandb>=0.15.0
+tensorboard>=2.13.0
+
+# API and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+aiofiles>=23.2.0
+redis>=5.0.0
+pyjwt>=2.8.0
+passlib[bcrypt]>=1.7.4
+prometheus-client>=0.18.0
+
+# Document processing
+reportlab>=4.0.0
+PyPDF2>=3.0.0
+python-docx>=1.0.0
+openpyxl>=3.1.0
+music21>=9.1.0
+
+# Testing and development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+black>=23.10.0
+flake8>=6.1.0
+mypy>=1.6.0
+
+# Optimization and deployment
+onnx>=1.15.0
+onnxruntime>=1.16.0
+tensorrt>=8.6.0  # Uncomment if NVIDIA GPU available
+
+# Evaluation
+pycocotools>=2.0.7
+
+# Utilities
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+click>=8.1.0
+requests>=2.31.0
+aiohttp>=3.8.0
+psutil>=5.9.0
+Faker>=19.12.0
+gdown>=4.7.0
+
+# Optional for specific features
+pycuda>=2022.2  # For TensorRT optimization
+musescore  # For music score rendering (system package)

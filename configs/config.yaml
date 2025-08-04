@@ -1,0 +1,57 @@
+# Simple YOLO configuration for document detection
+
+# Dataset paths
+path: data  # dataset root dir
+train: images/train  # train images (relative to 'path')
+val: images/val  # val images (relative to 'path')
+test:  # test images (optional)
+
+# Classes
+nc: 26  # number of classes
+names: [
+  'text', 'title', 'list', 'table', 'figure', 'caption',
+  'header', 'footer', 'page_number', 'staff', 'measure',
+  'note', 'clef', 'time_signature', 'lyrics', 'checkbox',
+  'input_field', 'signature_field', 'dropdown', 'flowchart',
+  'graph', 'equation', 'barcode', 'qr_code', 'logo', 'stamp'
+]
+
+# Training parameters
+epochs: 50
+batch: 16
+imgsz: 640
+patience: 10
+workers: 8
+
+# Model
+model: yolov8m.pt  # starting weights
+
+# Optimizer
+optimizer: SGD  # or 'Adam', 'AdamW'
+lr0: 0.01  # initial learning rate
+momentum: 0.937
+weight_decay: 0.0005
+
+# Augmentation
+hsv_h: 0.015  # image HSV-Hue augmentation (fraction)
+hsv_s: 0.7    # image HSV-Saturation augmentation (fraction)
+hsv_v: 0.4    # image HSV-Value augmentation (fraction)
+degrees: 0.0  # image rotation (+/- deg)
+translate: 0.1  # image translation (+/- fraction)
+scale: 0.5    # image scale (+/- gain)
+shear: 0.0    # image shear (+/- deg)
+perspective: 0.0  # image perspective (+/- fraction)
+flipud: 0.0   # image flip up-down (probability)
+fliplr: 0.5   # image flip left-right (probability)
+mosaic: 1.0   # image mosaic (probability)
+mixup: 0.0    # image mixup (probability)
+
+# Save settings
+save: True
+save_period: -1  # save checkpoint every x epochs
+plots: True      # save plots during train
+
+# Project settings
+project: models/checkpoints
+name: document_detection
+exist_ok: True   # overwrite existing project/name

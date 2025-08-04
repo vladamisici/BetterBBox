@@ -1,4 +1,4 @@
-"""
+import base64"""
 Production-ready REST API for Document Detection Model
 Includes authentication, rate limiting, caching, and monitoring
 """
@@ -29,6 +29,7 @@ import jwt
 from passlib.context import CryptContext
 from prometheus_client import Counter, Histogram, generate_latest
 import aiofiles
+import base64
 
 from enhanced_content_detector import EnhancedContentDetector, BoundingBox, visualize_results
 
