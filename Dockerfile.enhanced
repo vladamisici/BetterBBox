@@ -1,0 +1,126 @@
+# Enhanced Multi-stage Dockerfile for Document Intelligence System
+
+# Base stage with common dependencies
+FROM python:3.11-slim AS base
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    libmagic1 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgeos-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Development stage with additional tools
+FROM base AS development
+
+# Install development dependencies
+RUN pip install --no-cache-dir \
+    ipython \
+    jupyter \
+    pytest \
+    pytest-cov \
+    pytest-asyncio \
+    black \
+    flake8 \
+    mypy \
+    debugpy
+
+# Copy source code
+COPY . .
+
+# Set environment for development
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=development
+
+# Production stage - optimized for size and security
+FROM base AS production
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Copy only necessary files
+COPY --chown=appuser:appuser . .
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/static /app/temp /app/models && \
+    chown -R appuser:appuser /app
+
+# Download pre-trained models (optional - can be mounted instead)
+# RUN python -c "from transformers import AutoModel; AutoModel.from_pretrained('microsoft/layoutlmv3-base')"
+
+# Switch to non-root user
+USER appuser
+
+# Set environment for production
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=production
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Training stage for model training
+FROM base AS training
+
+# Install additional ML dependencies
+RUN pip install --no-cache-dir \
+    wandb \
+    tensorboard \
+    optuna \
+    ray[tune]
+
+# Install CUDA dependencies if needed
+# RUN apt-get update && apt-get install -y \
+#     cuda-toolkit-11-8 \
+#     && rm -rf /var/lib/apt/lists/*
+
+# Copy training scripts
+COPY . .
+
+# Set environment for training
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=training
+
+# Default command for training
+CMD ["python", "train_enhanced.py"]
+
+# Celery worker stage
+FROM production AS celery-worker
+
+# Override command for Celery worker
+CMD ["celery", "-A", "celery_app", "worker", "--loglevel=info"]
+
+# Celery beat stage
+FROM production AS celery-beat
+
+# Override command for Celery beat
+CMD ["celery", "-A", "celery_app", "beat", "--loglevel=info"]
+
+# Flower monitoring stage
+FROM production AS flower
+
+# Override command for Flower
+CMD ["celery", "-A", "celery_app", "flower", "--port=5555"]

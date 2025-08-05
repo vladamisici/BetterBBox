@@ -1,4 +1,4 @@
-import base64"""
+"""
 Production-ready REST API for Document Detection Model
 Includes authentication, rate limiting, caching, and monitoring
 """
@@ -25,13 +25,18 @@ import numpy as np
 import cv2
 from PIL import Image
 import redis
-import jwt
-from passlib.context import CryptContext
 from prometheus_client import Counter, Histogram, generate_latest
 import aiofiles
 import base64
 
 from enhanced_content_detector import EnhancedContentDetector, BoundingBox, visualize_results
+from auth import (
+    create_access_token,
+    verify_token,
+    get_password_hash,
+    verify_password,
+)
+from celery_worker import process_batch_detection
 
 
 # Configuration
@@ -76,9 +81,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security
-security = HTTPBearer()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Thread pool for CPU-intensive operations
 executor = ThreadPoolExecutor(max_workers=4)
@@ -86,6 +88,8 @@ executor = ThreadPoolExecutor(max_workers=4)
 # Global model instance
 model_instance = None
 redis_client = None
+# In-memory user database (for demonstration purposes)
+fake_users_db = {}
 
 
 # Pydantic models
@@ -135,35 +139,6 @@ class TokenResponse(BaseModel):
     token_type: str
 
 
-# Helper functions
-def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    """Verify JWT token"""
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, Config.SECRET_KEY, algorithms=[Config.ALGORITHM])
-        username = payload.get("sub")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return username
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-def create_access_token(data: dict):
-    """Create JWT access token"""
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=Config.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, Config.SECRET_KEY, algorithm=Config.ALGORITHM)
-    return encoded_jwt
 
 
 async def check_rate_limit(user_id: str):
@@ -302,24 +277,41 @@ async def health_check():
     )
 
 
+@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+async def register_user(username: str, password: str):
+    """Register a new user"""
+    if username in fake_users_db:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered",
+        )
+    hashed_password = get_password_hash(password)
+    fake_users_db[username] = {"password": hashed_password}
+    return {"message": "User registered successfully"}
+
+
 @app.post("/auth/token", response_model=TokenResponse)
 async def login(username: str, password: str):
     """Get authentication token"""
-    # In production, verify against a user database
-    if username == "demo" and password == "demo123":
-        access_token = create_access_token(data={"sub": username})
-        return TokenResponse(access_token=access_token, token_type="bearer")
-    
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Incorrect username or password",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    user = fake_users_db.get(username)
+    if not user or not verify_password(password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": username})
+    return TokenResponse(access_token=access_token, token_type="bearer")
 
 
-@app.post("/api/v1/detect", response_model=DetectionResponse)
+@app.post(
+    "/api/v1/detect",
+    response_model=DetectionResponse,
+    summary="Detect objects in a single image",
+    description="Upload an image to detect various document elements like text, tables, and figures.",
+)
 async def detect_single(
-    file: UploadFile = File(...),
+    file: UploadFile = File(..., description="Image file to process."),
     confidence_threshold: float = 0.3,
     nms_threshold: float = 0.5,
     use_ensemble: bool = True,
@@ -327,7 +319,17 @@ async def detect_single(
     classes: Optional[str] = None,
     current_user: str = Depends(verify_token)
 ):
-    """Detect objects in a single image"""
+    """
+    This endpoint analyzes a single uploaded image and returns a list of detected objects with their bounding boxes,
+    class names, and confidence scores.
+
+    - **file**: The image to be analyzed.
+    - **confidence_threshold**: Minimum confidence score for a detection to be included in the results.
+    - **nms_threshold**: Threshold for Non-Maximum Suppression to filter overlapping boxes.
+    - **use_ensemble**: Whether to use an ensemble of models for detection (recommended for higher accuracy).
+    - **return_visualization**: If true, the response will include a base64-encoded image with the detections drawn on it.
+    - **classes**: A comma-separated list of class names to filter the results.
+    """
     request_id = str(uuid.uuid4())
     start_time = time.time()
     
@@ -382,11 +384,11 @@ async def detect_single(
         visualization_url = None
         if return_visualization:
             viz_image = visualize_results(image_rgb, results['detections'])
-            # In production, upload to S3 or similar
-            # For now, we'll return base64
-            _, buffer = cv2.imencode('.jpg', cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
-            viz_base64 = base64.b64encode(buffer).decode('utf-8')
-            visualization_url = f"data:image/jpeg;base64,{viz_base64}"
+            # Save visualization to static directory
+            viz_filename = f"{request_id}.jpg"
+            viz_path = f"static/{viz_filename}"
+            cv2.imwrite(viz_path, cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
+            visualization_url = f"/static/{viz_filename}"
         
         processing_time = time.time() - start_time
         
@@ -424,59 +426,57 @@ async def detect_single(
         )
 
 
-@app.post("/api/v1/batch")
+@app.post(
+    "/api/v1/batch",
+    summary="Process multiple images in batch",
+    description="Upload up to 10 images to process them in a single batch request.",
+)
 async def detect_batch(
-    files: List[UploadFile] = File(...),
-    confidence_threshold: float = 0.3,
-    nms_threshold: float = 0.5,
-    use_ensemble: bool = True,
+    files: List[UploadFile] = File(..., description="A list of image files to process."),
     current_user: str = Depends(verify_token)
 ):
-    """Process multiple images in batch"""
+    """
+    This endpoint processes multiple images asynchronously using Celery.
+    It returns a task ID that can be used to check the status of the batch processing.
+
+    - **files**: A list of up to 10 image files to be analyzed.
+    """
     if len(files) > 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Maximum 10 images per batch"
         )
-    
+
     # Rate limiting (count as multiple requests)
     for _ in range(len(files)):
         await check_rate_limit(current_user)
-    
-    results = []
+
+    task_ids = []
     for file in files:
-        try:
-            result = await detect_single(
-                file=file,
-                confidence_threshold=confidence_threshold,
-                nms_threshold=nms_threshold,
-                use_ensemble=use_ensemble,
-                return_visualization=False,
-                current_user=current_user
-            )
-            results.append({
-                'filename': file.filename,
-                'result': result.dict()
-            })
-        except Exception as e:
-            results.append({
-                'filename': file.filename,
-                'error': str(e)
-            })
-    
+        contents = await file.read()
+        task = process_batch_detection.delay(contents, file.filename)
+        task_ids.append(task.id)
+
     return {
-        'success': True,
-        'batch_size': len(files),
-        'results': results
+        "success": True,
+        "message": "Batch processing started.",
+        "task_ids": task_ids,
     }
 
 
-@app.get("/api/v1/result/{request_id}")
+@app.get(
+    "/api/v1/result/{request_id}",
+    summary="Get cached detection result",
+    description="Retrieve the results of a previous detection request using its request ID.",
+)
 async def get_cached_result(
     request_id: str,
     current_user: str = Depends(verify_token)
 ):
-    """Get cached detection result"""
+    """
+    If a detection request was successful, its results are cached in Redis for one hour.
+    You can use this endpoint to retrieve the results without having to re-upload the image.
+    """
     if not redis_client:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -495,9 +495,16 @@ async def get_cached_result(
     return json.loads(cached)
 
 
-@app.get("/api/v1/classes")
+@app.get(
+    "/api/v1/classes",
+    summary="Get list of supported detection classes",
+    description="Returns a list of all the object classes that the model can detect.",
+)
 async def get_supported_classes():
-    """Get list of supported detection classes"""
+    """
+    This endpoint provides a list of all the classes that the model is trained to detect,
+    along with their corresponding IDs and categories.
+    """
     from enhanced_content_detector import EnhancedClasses
     
     classes = []
@@ -540,7 +547,11 @@ async def get_metrics():
     )
 
 
-@app.post("/api/v1/feedback")
+@app.post(
+    "/api/v1/feedback",
+    summary="Submit feedback for improving the model",
+    description="Provide feedback on the quality of the detections for a specific request.",
+)
 async def submit_feedback(
     request_id: str,
     correct_detections: int,
@@ -549,7 +560,16 @@ async def submit_feedback(
     comments: Optional[str] = None,
     current_user: str = Depends(verify_token)
 ):
-    """Submit feedback for improving the model"""
+    """
+    This endpoint allows you to provide feedback on the performance of the model for a specific request.
+    This feedback can be used to improve the model in future versions.
+
+    - **request_id**: The ID of the request you are providing feedback for.
+    - **correct_detections**: The number of correctly detected objects.
+    - **missed_detections**: The number of objects that the model missed.
+    - **false_positives**: The number of objects that the model detected incorrectly.
+    - **comments**: Any additional comments you have about the detections.
+    """
     feedback = {
         'request_id': request_id,
         'user': current_user,

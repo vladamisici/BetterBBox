@@ -424,6 +424,29 @@ class TestPerformance(unittest.TestCase):
         for result in results:
             self.assertTrue(result.get('success', False))
 
+    @pytest.mark.asyncio
+    async def test_websocket_endpoint(self):
+        """Test WebSocket detection endpoint"""
+        api_url = os.getenv("TEST_API_URL", "http://localhost:8000").replace("http", "ws")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(f"{api_url}/ws/detect") as ws:
+                # Create test image
+                img = np.ones((100, 100, 3), dtype=np.uint8) * 128
+                _, buffer = cv2.imencode('.jpg', img)
+                image_data = buffer.tobytes()
+
+                # Send image
+                await ws.send_bytes(image_data)
+
+                # Receive response
+                response = await ws.receive_json(timeout=10)
+
+                # Check response
+                self.assertTrue(response.get('success'))
+                self.assertIn('detections', response)
+                self.assertIsInstance(response['detections'], list)
+
 
 class TestOptimization(unittest.TestCase):
     """Test model optimization techniques"""
